@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/">
+        <file>localhost+2.pem</file>
+        <file>localhost+2-key.pem</file>
+        <file>image.png</file>
+    </qresource>
+</RCC>

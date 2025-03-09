@@ -1,0 +1,155 @@
+#include <QCoreApplication>
+#include <QHttpServer>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSslKey>
+#include <QTemporaryFile>
+int main(int argc, char *argv[])
+{
+    QCoreApplication a(argc, argv);
+
+    // Set up code that uses the Qt event loop here.
+    // Call a.quit() or a.exit() to quit the application.
+    // A not very useful example would be including
+    // #include <QTimer>
+    // near the top of the file and calling
+    // QTimer::singleShot(5000, &a, &QCoreApplication::quit);
+    // which quits the application after 5 seconds.
+
+    // If you do not need a running Qt event loop, remove the call
+    // to a.exec() or use the Non-Qt Plain C++ Application template.
+
+    // QTemporaryFile *certFile = QTemporaryFile::createNativeFile(":/localhost+2.pem");
+    // QTemporaryFile *keyFile = QTemporaryFile::createNativeFile(":/localhost+2-key.pem");
+    // QSslCertificate certificate(certFile,QSsl::Pem);
+    // QSslKey privateKey(keyFile,QSsl::Rsa,QSsl::Pem);
+
+    QHttpServer server;
+    // server.sslSetup(certificate,privateKey);
+
+    server.route("/test/",[](const QString page,const QHttpServerRequest &request){
+        qDebug() << "method:" << request.method();
+        qDebug() << "body:" << request.body();
+        qDebug() << "headers:" <<  request.headers();
+        qDebug() << "query:" << request.query().toString();
+        return "hello world"+page;
+    });
+
+
+    server.route("/image",[]{
+        return QHttpServerResponse::fromFile(":/image.png");
+    });
+
+    server.route("/mp4",[]{
+        auto response = QHttpServerResponse::fromFile("E:/uwsmb/07.mp4");
+        QHttpServerResponder::HeaderList headerList {
+            {"Accept-Ranges","bytes"}
+        };
+        response.addHeaders(headerList);
+        return response;
+    });
+
+    server.route("/mp4byresponse",[](const QHttpServerRequest &request){
+        QFile file("E:/uwsmb/07.mp4");
+        file.open(QIODevice::ReadOnly);
+        qint64 start = 0;
+        qint64 size = file.size();
+
+        foreach (const auto &header, request.headers()) {
+            if(header.first == "Range"){
+                start = header.second.mid(header.second.indexOf('=')+1).split('-')[0].toLongLong();
+                break;
+            }
+        }
+        // Content-Range:bytes 37978112-330370234/330370235
+        QByteArray range = QString("bytes %1-%2/%3").arg(start).arg(size-1).arg(size).toUtf8();
+        QHttpServerResponder::HeaderList headerList {
+            {"Accept-Ranges","bytes"},
+            {"Content-Range",range},
+            {"Access-Control-Expose-Headers","Content-Range,Accept-Ranges"}
+        };
+        file.seek(start);
+        QByteArray array = file.read(file.size() - start);
+        file.close();
+
+        auto res = QHttpServerResponse(array,QHttpServerResponse::StatusCode::PartialContent);
+        res.addHeaders(headerList);
+        return res;
+    });
+
+
+    server.route("/mp4byresponder",[](const QHttpServerRequest &request,QHttpServerResponder &&responder){
+        QFile file("E:/uwsmb/07.mp4");
+        file.open(QIODevice::ReadOnly);
+        qint64 start = 0;
+        qint64 size = file.size();
+
+        foreach (const auto &header, request.headers()) {
+            if(header.first == "Range"){
+                start = header.second.mid(header.second.indexOf('=')+1).split('-')[0].toLongLong();
+                break;
+            }
+        }
+        // Content-Range:bytes 37978112-330370234/330370235
+        QByteArray range = QString("bytes %1-%2/%3").arg(start).arg(size-1).arg(size).toUtf8();
+        QHttpServerResponder::HeaderList headerList {
+            {"Access-Control-Allow-Origin","*"},
+            {"Accept-Ranges","bytes"},
+            {"Content-Range",range},
+            {"Content-Type","video/mp4"},
+            {"Access-Control-Expose-Headers","Content-Range,Accept-Ranges"}
+        };
+        file.seek(start);
+        QByteArray array = file.read(file.size() - start);
+        file.close();
+        responder.write(array,headerList,QHttpServerResponder::StatusCode::PartialContent);
+
+    });
+
+    server.route("/json",[](){
+        QJsonObject jsonObject;
+        jsonObject["name"] = "UWillno";
+        jsonObject["age"] = 23;
+        // return jsonObject;  //content-type: text/javascript
+        return QHttpServerResponse(jsonObject);
+    });
+
+
+    server.route("/xml",[](){
+        QString xmlContent = R"(<?xml version="1.0" encoding="UTF-8"?>
+ <rss version="2.0">
+   <channel>
+     <item>
+       <title>Qt 6.0.2 Released</title>
+       <link>https://www.qt.io/blog/qt-6.0.2-released</link>
+       <pubDate>Wed, 03 Mar 2021 12:40:43 GMT</pubDate>
+     </item>
+     <item>
+       <title>Qt 6.1 Beta Released</title>
+       <link>https://www.qt.io/blog/qt-6.1-beta-released</link>
+       <pubDate>Tue, 02 Mar 2021 13:05:47 GMT</pubDate>
+     </item>
+     <item>
+       <title>Qt Creator 4.14.1 released</title>
+       <link>https://www.qt.io/blog/qt-creator-4.14.1-released</link>
+       <pubDate>Wed, 24 Feb 2021 13:53:21 GMT</pubDate>
+     </item>
+   </channel>
+ </rss>)";
+
+        // return xmlContent;
+        return QHttpServerResponse("application/xml",xmlContent.toUtf8());
+    });
+
+
+    server.afterRequest([] (QHttpServerResponse &&resp) {
+        // resp.addHeader();
+        resp.setHeader("Access-Control-Allow-Origin","*");
+        return std::move(resp);
+    });
+
+    server.listen(QHostAddress::Any,4444);
+
+
+    return a.exec();
+}
