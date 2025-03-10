@@ -3,6 +3,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSslKey>
+#include <QSslserver>
 #include <QTemporaryFile>
 int main(int argc, char *argv[])
 {
@@ -19,12 +20,26 @@ int main(int argc, char *argv[])
     // If you do not need a running Qt event loop, remove the call
     // to a.exec() or use the Non-Qt Plain C++ Application template.
 
-    // QTemporaryFile *certFile = QTemporaryFile::createNativeFile(":/localhost+2.pem");
-    // QTemporaryFile *keyFile = QTemporaryFile::createNativeFile(":/localhost+2-key.pem");
-    // QSslCertificate certificate(certFile,QSsl::Pem);
-    // QSslKey privateKey(keyFile,QSsl::Rsa,QSsl::Pem);
+    QTemporaryFile *certFile = QTemporaryFile::createNativeFile(":/localhost+2.pem");
+    QTemporaryFile *keyFile = QTemporaryFile::createNativeFile(":/localhost+2-key.pem");
+    QSslCertificate certificate(certFile,QSsl::Pem);
+    QSslKey privateKey(keyFile,QSsl::Rsa,QSsl::Pem);
+
+
+    QSslConfiguration config;
+    config.setLocalCertificate(certificate);
+    config.setPrivateKey(privateKey);
 
     QHttpServer server;
+    // server.bind();
+    QSslServer tcpServer;
+    tcpServer.setSslConfiguration(config);
+    tcpServer.listen(QHostAddress::Any,6444);
+    // tcpServer.listen();
+    server.bind(&tcpServer);
+
+
+
     // server.sslSetup(certificate,privateKey);
 
     server.route("/test/",[](const QString page,const QHttpServerRequest &request){
@@ -41,68 +56,79 @@ int main(int argc, char *argv[])
     });
 
     server.route("/mp4",[]{
-        auto response = QHttpServerResponse::fromFile("E:/uwsmb/07.mp4");
-        QHttpServerResponder::HeaderList headerList {
-            {"Accept-Ranges","bytes"}
-        };
-        response.addHeaders(headerList);
+        auto response = QHttpServerResponse::fromFile("E:/uwsmb/10.mp4");
+        auto headers = response.headers();
+        headers.append("Accept-Ranges","bytes");
+        response.setHeaders(headers);
         return response;
     });
 
     server.route("/mp4byresponse",[](const QHttpServerRequest &request){
-        QFile file("E:/uwsmb/07.mp4");
+        QFile file("E:/uwsmb/10.mp4");
         file.open(QIODevice::ReadOnly);
         qint64 start = 0;
         qint64 size = file.size();
 
-        foreach (const auto &header, request.headers()) {
-            if(header.first == "Range"){
-                start = header.second.mid(header.second.indexOf('=')+1).split('-')[0].toLongLong();
-                break;
-            }
+        auto reqHeaders = request.headers();
+        // foreach (const auto &header, request.headers().toListOfPairs()) {
+        //     if(header.first == "Range"){
+        //         start = header.second.mid(header.second.indexOf('=')+1).split('-')[0].toLongLong();
+        //         break;
+        //     }
+        // }
+        if(reqHeaders.contains("Range")){
+            auto range =QString::fromUtf8(reqHeaders.value("Range"));
+            start = range.mid(range.indexOf('=')+1).split('-')[0].toLongLong();
         }
-        // Content-Range:bytes 37978112-330370234/330370235
+
+        // // Content-Range:bytes 37978112-330370234/330370235
         QByteArray range = QString("bytes %1-%2/%3").arg(start).arg(size-1).arg(size).toUtf8();
-        QHttpServerResponder::HeaderList headerList {
-            {"Accept-Ranges","bytes"},
-            {"Content-Range",range},
-            {"Access-Control-Expose-Headers","Content-Range,Accept-Ranges"}
-        };
+
         file.seek(start);
         QByteArray array = file.read(file.size() - start);
         file.close();
 
         auto res = QHttpServerResponse(array,QHttpServerResponse::StatusCode::PartialContent);
-        res.addHeaders(headerList);
+        auto resHeaders = res.headers();
+
+
+        resHeaders.append(QHttpHeaders::WellKnownHeader::ContentType,"video/mp4");
+        resHeaders.append("Accept-Ranges","bytes");
+        resHeaders.append("Content-Range",range);
+        resHeaders.append("Access-Control-Expose-Headers","Content-Range,Accept-Ranges");
+        res.setHeaders(resHeaders);
+
         return res;
     });
 
 
-    server.route("/mp4byresponder",[](const QHttpServerRequest &request,QHttpServerResponder &&responder){
-        QFile file("E:/uwsmb/07.mp4");
+    server.route("/mp4byresponder",[](const QHttpServerRequest &request,QHttpServerResponder &responder){
+        QFile file("E:/uwsmb/10.mp4");
         file.open(QIODevice::ReadOnly);
         qint64 start = 0;
         qint64 size = file.size();
 
-        foreach (const auto &header, request.headers()) {
-            if(header.first == "Range"){
-                start = header.second.mid(header.second.indexOf('=')+1).split('-')[0].toLongLong();
-                break;
-            }
+        auto reqHeaders = request.headers();
+
+        if(reqHeaders.contains("Range")){
+            auto range =QString::fromUtf8(reqHeaders.value("Range"));
+            start = range.mid(range.indexOf('=')+1).split('-')[0].toLongLong();
         }
         // Content-Range:bytes 37978112-330370234/330370235
         QByteArray range = QString("bytes %1-%2/%3").arg(start).arg(size-1).arg(size).toUtf8();
-        QHttpServerResponder::HeaderList headerList {
-            {"Access-Control-Allow-Origin","*"},
-            {"Accept-Ranges","bytes"},
-            {"Content-Range",range},
-            {"Content-Type","video/mp4"},
-            {"Access-Control-Expose-Headers","Content-Range,Accept-Ranges"}
-        };
+
+        QHttpHeaders resHeaders;
+
+
+        resHeaders.append(QHttpHeaders::WellKnownHeader::ContentType,"video/mp4");
+        resHeaders.append("Accept-Ranges","bytes");
+        resHeaders.append("Content-Range",range);
+        resHeaders.append("Access-Control-Expose-Headers","Content-Range,Accept-Ranges");
+        resHeaders.append("Access-Control-Allow-Origin","*");
         file.seek(start);
         QByteArray array = file.read(file.size() - start);
         file.close();
-        responder.write(array,headerList,QHttpServerResponder::StatusCode::PartialContent);
+        responder.write(array,resHeaders,QHttpServerResponder::StatusCode::PartialContent);
 
     });
 
@@ -117,38 +143,38 @@ int main(int argc, char *argv[])
 
     server.route("/xml",[](){
         QString xmlContent = R"(<?xml version="1.0" encoding="UTF-8"?>
- <rss version="2.0">
-   <channel>
-     <item>
-       <title>Qt 6.0.2 Released</title>
-       <link>https://www.qt.io/blog/qt-6.0.2-released</link>
-       <pubDate>Wed, 03 Mar 2021 12:40:43 GMT</pubDate>
-     </item>
-     <item>
-       <title>Qt 6.1 Beta Released</title>
-       <link>https://www.qt.io/blog/qt-6.1-beta-released</link>
-       <pubDate>Tue, 02 Mar 2021 13:05:47 GMT</pubDate>
-     </item>
-     <item>
-       <title>Qt Creator 4.14.1 released</title>
-       <link>https://www.qt.io/blog/qt-creator-4.14.1-released</link>
-       <pubDate>Wed, 24 Feb 2021 13:53:21 GMT</pubDate>
-     </item>
-   </channel>
- </rss>)";
+    <rss version="2.0">
+      <channel>
+        <item>
+          <title>Qt 6.0.2 Released</title>
+          <link>https://www.qt.io/blog/qt-6.0.2-released</link>
+          <pubDate>Wed, 03 Mar 2021 12:40:43 GMT</pubDate>
+        </item>
+        <item>
+          <title>Qt 6.1 Beta Released</title>
+          <link>https://www.qt.io/blog/qt-6.1-beta-released</link>
+          <pubDate>Tue, 02 Mar 2021 13:05:47 GMT</pubDate>
+        </item>
+        <item>
+          <title>Qt Creator 4.14.1 released</title>
+          <link>https://www.qt.io/blog/qt-creator-4.14.1-released</link>
+          <pubDate>Wed, 24 Feb 2021 13:53:21 GMT</pubDate>
+        </item>
+      </channel>
+    </rss>)";
 
         // return xmlContent;
         return QHttpServerResponse("application/xml",xmlContent.toUtf8());
     });
 
 
-    server.afterRequest([] (QHttpServerResponse &&resp) {
-        // resp.addHeader();
-        resp.setHeader("Access-Control-Allow-Origin","*");
-        return std::move(resp);
+    server.addAfterRequestHandler(&server, [] (const QHttpServerRequest &req, QHttpServerResponse &resp) {
+        Q_UNUSED(req);
+        auto headers = resp.headers();
+        headers.append("Access-Control-Allow-Origin","*");
+        resp.setHeaders(headers);
     });
 
-    server.listen(QHostAddress::Any,4444);
 
 
     return a.exec();
