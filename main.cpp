@@ -5,6 +5,9 @@
 #include <QSslKey>
 #include <QSslserver>
 #include <QTemporaryFile>
+#include <QWebSocketServer>
+#include <QObject>
+
 int main(int argc, char *argv[])
 {
     QCoreApplication a(argc, argv);
@@ -32,15 +35,16 @@ int main(int argc, char *argv[])
 
     QHttpServer server;
     // server.bind();
-    QSslServer tcpServer;
-    tcpServer.setSslConfiguration(config);
+
+
+    QTcpServer tcpServer;
+    // QSslServer tcpServer;
+    // tcpServer.setSslConfiguration(config);
     tcpServer.listen(QHostAddress::Any,6444);
     // tcpServer.listen();
     server.bind(&tcpServer);
 
 
-
-    // server.sslSetup(certificate,privateKey);
 
     server.route("/test/",[](const QString page,const QHttpServerRequest &request){
         qDebug() << "method:" << request.method();
@@ -175,6 +179,37 @@ int main(int argc, char *argv[])
         resp.setHeaders(headers);
     });
 
+
+
+    QObject::connect(&server,&QHttpServer::newWebSocketConnection,&server,[&]{
+        auto socket = server.nextPendingWebSocketConnection().release();
+        if(socket){
+            socket->sendTextMessage("websocket连接成功");
+            socket->setParent(&server);
+            auto list = server.findChildren<QWebSocket *>();
+            foreach (const auto &s, list) {
+                if(s->state() == QAbstractSocket::ConnectedState)
+                    s->sendTextMessage("当前ws数量："+ QString::number(list.length()));
+            }
+            // qDebug() << list;
+            QObject::connect(socket,&QWebSocket::textMessageReceived,&server,[socket,&server](QString message){
+                auto list = server.findChildren<QWebSocket *>();
+                foreach (const auto &s, list) {
+                    if(s != socket && s->state() == QAbstractSocket::ConnectedState)
+                        s->sendTextMessage(message);
+                }
+            });
+            QObject::connect(socket,&QWebSocket::disconnected,socket,&QWebSocket::deleteLater);
+        }
+    });
+
+    server.addWebSocketUpgradeVerifier(
+        &server, [](const QHttpServerRequest &request) {
+            if (request.url().path() == "/ws")
+                return QHttpServerWebSocketUpgradeResponse::accept();
+            else
+                return QHttpServerWebSocketUpgradeResponse::passToNext();
+        });
 
 
     return a.exec();
